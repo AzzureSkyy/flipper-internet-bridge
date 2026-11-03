@@ -109,10 +109,48 @@ class BluetoothTransport:
             await self.client.write_gatt_char(RX, chunk, response=True)
 
 
+async def paired_bridge_addresses():
+    """Windows keeps bonded LE devices connected, so they stop advertising.
+
+    Return addresses of FZ Bridge devices already paired with Windows so the
+    host can connect directly instead of waiting for an advertisement.
+    """
+    if sys.platform != "win32":
+        return []
+    try:
+        from winrt.windows.devices.bluetooth import BluetoothLEDevice
+        from winrt.windows.devices.enumeration import DeviceInformation
+    except ImportError:
+        return []
+    selector = BluetoothLEDevice.get_device_selector_from_pairing_state(True)
+    addresses = []
+    for info in await DeviceInformation.find_all_async_aqs_filter(selector):
+        if not info.name.startswith("FZ Bridge "):
+            continue
+        device = await BluetoothLEDevice.from_id_async(info.id)
+        if device is None:
+            continue
+        value = device.bluetooth_address
+        addresses.append(":".join(f"{(value >> shift) & 0xFF:02X}" for shift in range(40, -1, -8)))
+    return addresses
+
+
+async def find_bridge(timeout=60):
+    from bleak import BleakScanner
+    from bleak.backends.device import BLEDevice
+    paired = await paired_bridge_addresses()
+    if paired:
+        # A short scan still prefers a live advertisement when one exists.
+        device = await BleakScanner.find_device_by_filter(bridge_advertisement, timeout=5)
+        # A bare address string makes Bleak scan again; a BLEDevice connects directly.
+        return device or BLEDevice(paired[0], "FZ Bridge", None)
+    return await BleakScanner.find_device_by_filter(bridge_advertisement, timeout=timeout)
+
+
 async def connect_demo(serve):
-    from bleak import BleakClient, BleakScanner
+    from bleak import BleakClient
     print("Searching for FZ Bridge (select Bluetooth Internet Bridge on Flipper).", flush=True)
-    device = await BleakScanner.find_device_by_filter(bridge_advertisement, timeout=60)
+    device = await find_bridge()
     if device is None:
         raise RuntimeError("No Flipper Bridge advertisement found")
     transport = None

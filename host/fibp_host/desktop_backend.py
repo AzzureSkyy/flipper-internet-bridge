@@ -113,7 +113,8 @@ class DesktopHost(BridgeHost):
 def bridge_ports():
     """Probe only Flipper dual-CDC VID/PID, never unrelated serial devices."""
     from serial.tools import list_ports
-    ports = [p.device for p in list_ports.comports() if p.vid == 0x0483 and p.pid == 0x5741]
+    ports = [p.device for p in list_ports.comports() if p.vid == 0x0483 and (
+        p.pid == 0x5741 or (p.pid == 0x5740 and (p.location or "").endswith(":x.2")))]
     # The macOS CLI ends in 1 and bridge CDC in 3. Elsewhere this is only a
     # probe order; validated FIBP HELLO, not the port name, identifies the peer.
     return sorted(ports, key=lambda name: (not name.endswith("3"), name))

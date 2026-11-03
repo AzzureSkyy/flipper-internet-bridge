@@ -11,6 +11,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QLockFile, QRegularExpression, Qt, Signal, Slot, QTimer
 from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QRegularExpressionValidator
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMenu, QMessageBox, QPushButton, QScrollArea, QSystemTrayIcon,
@@ -133,7 +134,7 @@ class ConsentDialog(QDialog):
             self.code.returnPressed.connect(lambda: self.choose(self.code.text()) if len(self.code.text()) == 6 else None)
             buttons.addWidget(pair)
         else:
-            once = QPushButton("Allow Once")
+            once = QPushButton("Allow Until Disconnect" if item.link == "bluetooth" else "Allow Once")
             once.clicked.connect(lambda: self.choose(PermissionDecision.ALLOW_ONCE))
             buttons.addWidget(once)
             if item.link == "usb":
@@ -350,12 +351,12 @@ class BridgeWindow(QWidget):
         self.status.setText(snapshot.status)
         self.error.setText(snapshot.error)
         self.error.setVisible(bool(snapshot.error))
-        self.allow.setText("Allow Once" if bluetooth else "Always Allow")
+        self.allow.setText("Allow Until Disconnect" if bluetooth else "Always Allow")
         self.allow.setEnabled(snapshot.enabled and snapshot.connected and not snapshot.access and not self.preview)
         self.revoke.setEnabled(snapshot.access and not self.preview)
         self.cancel.setVisible(snapshot.active_request)
         self.ble_controls.setVisible(bluetooth)
-        self.reconnect.setEnabled(snapshot.enabled and not self.preview)
+        self.reconnect.setEnabled(not self.preview)
         self.hint.setText("Select this computer in Flipper → Connection Requests. Pairing and internet permission are separate."
             if bluetooth else "Connect by USB, then choose USB Internet Bridge on Flipper. Internet Radio uses this connection.")
         self.pairings.refresh()
@@ -376,9 +377,13 @@ class BridgeWindow(QWidget):
             if self._dialog is dialog: self._dialog = None
             dialog.deleteLater()
         dialog.finished.connect(done)
+        self.show_front()
+        dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+        if self.tray is not None:
+            self.tray.showMessage("Flipper Internet Bridge", "Flipper is requesting approval. Open the bridge window to respond.")
 
     def show_pairings(self):
         if not self.preview: self.controller.refresh_pairings()
@@ -413,6 +418,17 @@ class BridgeWindow(QWidget):
         QApplication.instance().quit()
 
 
+SHOW_SERVER = "flipper-internet-bridge-show"
+
+
+def _accept_show(server, window):
+    while server.hasPendingConnections():
+        connection = server.nextPendingConnection()
+        connection.disconnected.connect(connection.deleteLater)
+        window.showNormal()
+        window.show_front()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Flipper Internet Bridge desktop helper")
     parser.add_argument("--dark", action="store_true", help="use the dark compact panel")
@@ -438,11 +454,23 @@ def main(argv=None):
     lock = QLockFile(str(root / "desktop.lock"))
     lock.setStaleLockTime(10_000)
     if not lock.tryLock(0):
+        # Ask the running instance to show its window; it may be hidden in the tray.
+        socket = QLocalSocket()
+        socket.connectToServer(SHOW_SERVER)
+        if socket.waitForConnected(1000):
+            socket.write(b"show")
+            socket.waitForBytesWritten(1000)
+            socket.disconnectFromServer()
+            return 0
         QMessageBox.information(None, "Flipper Internet Bridge", "The desktop bridge is already running. Open it from the system tray.")
         return 1
     apply_style(app, args.dark)
     controller = DesktopController()
     window = BridgeWindow(controller)
+    QLocalServer.removeServer(SHOW_SERVER)
+    show_server = QLocalServer(app)
+    show_server.newConnection.connect(lambda: _accept_show(show_server, window))
+    show_server.listen(SHOW_SERVER)
     app.aboutToQuit.connect(controller.close)
     controller.set_enabled("usb", True)
     window.show()

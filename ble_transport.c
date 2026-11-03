@@ -10,6 +10,7 @@
 #include <services/battery_service.h>
 #include <services/serial_service.h>
 #include <stdlib.h>
+#include <storage/storage.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -19,6 +20,8 @@
 #define BLE_FLAG_RX (1UL << 1)
 #define BLE_FLAG_STATE (1UL << 2)
 #define BLE_FLAG_OVERFLOW (1UL << 3)
+/* Own bond file so other BLE apps cannot overwrite the bridge's host bond. */
+#define BLE_KEYS_PATH EXT_PATH("apps_data/usb_internet_bridge/.bt_bridge.keys")
 
 typedef struct {
     FuriHalBleProfileBase base;
@@ -183,6 +186,9 @@ bool ble_transport_start(BleTransport* transport) {
     furi_thread_start(transport->worker);
     transport->worker_started = true;
     bt_set_status_changed_callback(transport->bt, ble_status_changed, transport);
+    bt_disconnect(transport->bt);
+    furi_delay_ms(200);
+    bt_keys_storage_set_storage_path(transport->bt, BLE_KEYS_PATH);
     if(!bt_profile_start(transport->bt, &bridge_ble_template, transport)) return false;
     transport->started = true;
     furi_hal_bt_start_advertising();
@@ -248,6 +254,9 @@ void ble_transport_free(BleTransport* transport) {
     }
     if(transport->bt) {
         /* Restore even after a failed profile start; no bond deletion. */
+        bt_disconnect(transport->bt);
+        furi_delay_ms(200);
+        bt_keys_storage_set_default_path(transport->bt);
         bt_profile_restore_default(transport->bt);
         furi_record_close(RECORD_BT);
     }

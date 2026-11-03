@@ -32,7 +32,7 @@ class DesktopWidgetTests(unittest.TestCase):
         self.controller.snapshots["usb"] = usb
         self.window.select("bluetooth")
         self.assertEqual(self.controller.snapshot("usb"), usb)
-        self.assertEqual(self.window.allow.text(), "Allow Once")
+        self.assertEqual(self.window.allow.text(), "Allow Until Disconnect")
         self.window.select("usb")
         self.assertEqual(self.window.allow.text(), "Always Allow")
 
@@ -41,7 +41,7 @@ class DesktopWidgetTests(unittest.TestCase):
         item = broker.request("test", "bluetooth", "permission", "Mico")
         dialog = ConsentDialog(item, self.window)
         buttons = {button.text() for button in dialog.findChildren(QPushButton)}
-        self.assertEqual(buttons, {"Deny", "Allow Once"})
+        {"Deny", "Allow Until Disconnect"}
         dialog.choose(PermissionDecision.ALLOW_ONCE)
         self.assertEqual(dialog.answer, PermissionDecision.ALLOW_ONCE)
 
