@@ -160,8 +160,11 @@ async def connect_demo(serve):
             transport.fail(ConnectionError("Bluetooth disconnected"))
 
     # Native pairing is automatic for authenticated characteristics on macOS.
+    # Windows may cache the Flipper's default profile (no bridge service);
+    # always re-read GATT from the device.
     async with BleakClient(device, disconnected_callback=disconnected,
-                           pair=sys.platform != "darwin", timeout=90) as client:
+                           pair=sys.platform != "darwin", timeout=90,
+                           winrt=dict(use_cached_services=False)) as client:
         transport = BluetoothTransport(client)
         await asyncio.wait_for(transport.start(), 90)
         await serve(transport)

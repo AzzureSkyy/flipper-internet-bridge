@@ -177,10 +177,12 @@ class ConnectionWorker:
                 if action == "allow":
                     choice = PermissionDecision.ALLOW_ONCE if self.link == "bluetooth" else PermissionDecision.ALLOW_ALWAYS
                     if self.link == "usb": self.controller.permissions.grant(hello)
+                    else: self.controller.ble_allowed.add(hello.device_id)
                     host.session.permission_pending = True
                     replies.extend(host.session.resolve_permission(choice))
                 else:
                     if self.link == "usb": self.controller.permissions.revoke(hello)
+                    else: self.controller.ble_allowed.discard(hello.device_id)
                     host.session.close()
                     host.session.permission_pending = False
                     host.session.permission = PermissionDecision.DENY
@@ -210,19 +212,39 @@ class ConnectionWorker:
         async def serve(transport):
             def prompt(_text, secret=False):
                 hello = self.pairing.hello if self.pairing else None
+                device = hello.device_id if hello else None
+                # Bluetooth allow lasts until the user disables/revokes, so a
+                # dropped link that reconnects does not ask again.
+                if not secret and device is not None and device in self.controller.ble_allowed:
+                    done = asyncio.get_running_loop().create_future()
+                    done.set_result("o")
+                    return done
                 item = self.controller.prompts.request(self.owner, self.link,
                     "code" if secret else "permission", hello.name if hello else "Flipper Zero")
                 # serve_demo owns its deadlines and cancels this waiter on disconnect.
                 async def answer():
                     value = await asyncio.wrap_future(item.future)
                     if secret: return value if isinstance(value, str) else ""
+                    if value == PermissionDecision.ALLOW_ONCE and device is not None:
+                        self.controller.ble_allowed.add(device)
                     return "o" if value == PermissionDecision.ALLOW_ONCE else "d"
                 return asyncio.ensure_future(answer())
             await serve_demo(transport, store, prompt=prompt,
                 host_factory=lambda: DesktopHost(self.controller, self, bluetooth=True),
                 on_update=self.update, on_tick=self.tick, stop=self.stop_event)
             self.controller.refresh_pairings()
-        await connect_demo(serve)
+        while not self.stop_event.is_set():
+            try:
+                await connect_demo(serve)
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self.controller.log(self.link, f"Bluetooth link lost: {display_text(error)}; retrying")
+            if self.stop_event.is_set(): break
+            self.controller.publish(self, ConnectionSnapshot(self.link, True,
+                status="Connection lost; reconnecting…"))
+            await asyncio.sleep(3)
 
     def run(self):
         try:
@@ -278,6 +300,7 @@ class DesktopController:
         self.workers = {}
         self.retiring = {}
         self.records = ()
+        self.ble_allowed = set()
         self.logs = deque(maxlen=256)
         self.pairing_error = ""
         self._closed = False
@@ -313,6 +336,7 @@ class DesktopController:
         with self._lock:
             if self._closed: return
             existing = self.workers.pop(link, None)
+            if link == "bluetooth" and not enabled: self.ble_allowed.clear()
             if existing:
                 self.retiring[existing.owner] = existing
                 existing.stop()
