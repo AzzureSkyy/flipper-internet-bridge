@@ -88,7 +88,7 @@ class BluetoothTransport:
     async def send(self, frame):
         async with self.write_lock:
             try:
-                await asyncio.wait_for(self._send(encode_frame(frame)), 4)
+                await asyncio.wait_for(self._send(encode_frame(frame)), 12)
             except BaseException:
                 self.fail(ConnectionError("Bluetooth frame delivery failed"))
                 # Never reuse an uncertain partial frame on the same link.

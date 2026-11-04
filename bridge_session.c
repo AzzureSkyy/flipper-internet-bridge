@@ -188,7 +188,7 @@ static bool bridge_session_send_frame(
         return false;
     }
     const uint32_t deadline = furi_get_tick() +
-        furi_ms_to_ticks(session->bluetooth_alpha ? 3000U : FIB_FRAME_TX_TIMEOUT_MS);
+        furi_ms_to_ticks(session->bluetooth_alpha ? 10000U : FIB_FRAME_TX_TIMEOUT_MS);
     const uint32_t frame_wait = bridge_ticks_until(deadline);
     if(frame_wait == 0U ||
        furi_mutex_acquire(session->tx_frame_mutex, frame_wait) != FuriStatusOk) {
@@ -1143,6 +1143,12 @@ static void bridge_session_on_frame(const FibFrame* frame, void* context) {
             result = fib_ble_pairing_open(session->pairing, frame->payload,
                 frame->payload_length,
                 furi_get_tick() / furi_ms_to_ticks(1), fib_pair_storage_load, NULL);
+            /* A computer that already completed code pairing reconnects
+             * without another Connection Requests approval. */
+            if(result == FibPairWaiting && session->pairing->known_host) {
+                result = fib_ble_pairing_approve(session->pairing, 0,
+                    furi_get_tick() / furi_ms_to_ticks(1));
+            }
         } else if((uint8_t)frame->type == FIB_PAIR_CODE) {
             result = fib_ble_pairing_submit(session->pairing, frame->payload,
                 frame->payload_length, furi_get_tick() / furi_ms_to_ticks(1),
@@ -1869,7 +1875,7 @@ void bridge_session_tick(BridgeSession* session) {
     }
     if(session->ping_pending &&
        bridge_ticks_elapsed(now, session->ping_started_tick,
-           session->bluetooth_alpha ? 5000U : FIB_PONG_TIMEOUT_MS)) {
+           session->bluetooth_alpha ? 15000U : FIB_PONG_TIMEOUT_MS)) {
         session->ping_pending = false;
         session->state = BridgeSessionStateTimedOut;
         bridge_session_set_detail_locked(session, "Connection test timed out");
