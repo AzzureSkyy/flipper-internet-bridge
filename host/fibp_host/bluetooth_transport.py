@@ -96,17 +96,21 @@ class BluetoothTransport:
                 raise
 
     async def _send(self, data):
-        for offset in range(0, len(data), self.write_size):
-            chunk = data[offset:offset + self.write_size]
-            while self.credits < len(chunk):
+        offset = 0
+        while offset < len(data):
+            # Flipper only refills credits once they reach exactly zero, so a
+            # short chunk must spend leftover credits or both sides deadlock.
+            while self.credits <= 0:
                 self.credit_changed.clear()
                 if self.closed.is_set():
                     raise ConnectionError("Bluetooth disconnected")
                 await self.credit_changed.wait()
             if self.closed.is_set() or not self.client.is_connected:
                 raise ConnectionError("Bluetooth disconnected")
+            chunk = data[offset:offset + min(self.write_size, self.credits)]
             self.credits -= len(chunk)
             await self.client.write_gatt_char(RX, chunk, response=True)
+            offset += len(chunk)
 
 
 async def paired_bridge_addresses():
